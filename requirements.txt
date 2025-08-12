@@ -1,0 +1,4 @@
+fastmcp>=2.10.0
+notion-client>=2.2.1
+openai>=1.40.0
+python-dotenv>=1.0.1
