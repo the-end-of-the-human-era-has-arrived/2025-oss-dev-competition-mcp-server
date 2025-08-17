@@ -38,7 +38,6 @@ openai_tools: List[Dict[str, Any]] = []
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
-    auth_token: Optional[str] = None
     cookies: Optional[str] = None
 
 
@@ -141,12 +140,15 @@ async def save_notion_page_to_backend(user_id: str, notion_data: NotionPageData)
 
 
 # ---------- AI 에이전트 처리 함수 ----------
-async def process_chat_with_ai(message: str, user_id: Optional[str] = None, auth_token: Optional[str] = None, cookies: Optional[str] = None) -> str:
+async def process_chat_with_ai(message: str, user_id: Optional[str] = None, cookies: Optional[str] = None) -> str:
     """AI 에이전트와 채팅을 처리합니다."""
     global mcp_client, openai_tools
     
     if not mcp_client:
         raise HTTPException(status_code=500, detail="MCP client not initialized")
+
+    # 쿠키 정보를 함수 전체에서 사용할 수 있도록 저장
+    final_cookies = cookies or ""
 
     messages: List[Dict[str, Any]] = [
         {
@@ -164,20 +166,20 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None, auth
 
     # 사용자 ID가 있는 경우 사용자별 노션 도구 사용을 권장
     if user_id:
-        auth_info = ""
-        if auth_token:
-            auth_info += f" auth_token='{auth_token}'"
-        if cookies:
-            auth_info += f" cookies='{cookies}'"
+        auth_instruction = f"user_id=\"{user_id}\""
+        if final_cookies:
+            auth_instruction += f", cookies=\"{final_cookies}\""
             
         messages[0]["content"] += (
-            f"\nUser ID: {user_id} "
-            f"- ALWAYS use 'notion_search_with_user' and 'notion_page_content_with_user' tools for this user's Notion data. "
-            f"- The backend API returns user info with lowercase field names: 'access_token', 'refresh_token', etc. "
-            f"- Use 'get_user_info' to get user information if needed. "
-            f"- Use 'save_notion_data_to_backend' to save processed Notion data to backend. "
-            f"- When calling user-specific tools, include these auth parameters:{auth_info} "
-            f"- If you get an access_token from the backend, that means the user HAS authorized Notion access."
+            f"\nIMPORTANT AUTHENTICATION RULES:\n"
+            f"- User ID: {user_id}\n"
+            f"- MANDATORY: When calling ANY user-specific tool, you MUST include these exact parameters: {auth_instruction}\n"
+            f"- ALWAYS use 'notion_search_with_user' and 'notion_page_content_with_user' (never the basic versions)\n"
+            f"- ALWAYS use 'get_user_info' with cookies before any Notion operations\n"
+            f"- The backend API returns lowercase fields: 'access_token', 'refresh_token', etc.\n"
+            f"- Example tool call: notion_search_with_user({auth_instruction}, query=\"search term\")\n"
+            f"- If you get an access_token from backend, the user HAS authorized Notion access.\n"
+            f"- NOTE: Authentication parameters will be automatically added to tool calls if missing.\n"
         )
 
     # Tool-call 루프
@@ -206,7 +208,16 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None, auth
                 except json.JSONDecodeError:
                     parsed = {}
 
-                # MCP 툴 실행
+                # MCP 툴 실행 - 사용자별 도구인 경우 인증 정보 자동 추가
+                if user_id and tname in ['get_user_info', 'notion_search_with_user', 'notion_page_content_with_user']:
+                    # 인증 정보가 없으면 자동으로 추가
+                    if 'user_id' not in parsed:
+                        parsed['user_id'] = user_id
+                    if final_cookies and 'cookies' not in parsed:
+                        parsed['cookies'] = final_cookies
+                    
+                    print(f"🔧 Auto-added auth to {tname}: user_id={user_id}, has_cookies={bool(final_cookies)}")
+                
                 result = await mcp_client.call_tool(tname, parsed)
                 tool_results.append((tc, tname, parsed, result))
 
@@ -299,17 +310,11 @@ async def chat_endpoint(request: ChatRequest, req: Request):
         cookies_from_header = req.headers.get("cookie", "")
         final_cookies = cookies_from_header or request.cookies or ""
         
-        # Authorization 헤더 추출
-        auth_from_header = req.headers.get("authorization", "")
-        final_auth_token = auth_from_header or request.auth_token or ""
-        
         print(f"🍪 Cookies from header: {cookies_from_header}")
-        print(f"🔑 Auth from header: {auth_from_header}")
         
         response = await process_chat_with_ai(
             request.message, 
             request.user_id, 
-            final_auth_token, 
             final_cookies
         )
         return ChatResponse(response=response)
