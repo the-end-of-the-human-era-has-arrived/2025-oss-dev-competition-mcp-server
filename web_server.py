@@ -3,7 +3,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastmcp import Client as MCPClient
@@ -38,6 +38,8 @@ openai_tools: List[Dict[str, Any]] = []
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
+    auth_token: Optional[str] = None
+    cookies: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -139,7 +141,7 @@ async def save_notion_page_to_backend(user_id: str, notion_data: NotionPageData)
 
 
 # ---------- AI 에이전트 처리 함수 ----------
-async def process_chat_with_ai(message: str, user_id: Optional[str] = None) -> str:
+async def process_chat_with_ai(message: str, user_id: Optional[str] = None, auth_token: Optional[str] = None, cookies: Optional[str] = None) -> str:
     """AI 에이전트와 채팅을 처리합니다."""
     global mcp_client, openai_tools
     
@@ -160,15 +162,23 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None) -> s
         {"role": "user", "content": _strip_surrogates(message)}
     ]
 
-    # 노션 글 목록 요청인지 확인하고 백엔드 연동 로직 추가
-    if "노션" in message and ("글" in message or "목록" in message):
-        if user_id:
-            try:
-                # 사용자 정보 가져오기
-                user_info = await get_user_info(user_id)
-                messages[0]["content"] += f"\nUser info: {json.dumps(user_info, ensure_ascii=False)}"
-            except Exception as e:
-                print(f"Warning: Could not get user info: {e}")
+    # 사용자 ID가 있는 경우 사용자별 노션 도구 사용을 권장
+    if user_id:
+        auth_info = ""
+        if auth_token:
+            auth_info += f" auth_token='{auth_token}'"
+        if cookies:
+            auth_info += f" cookies='{cookies}'"
+            
+        messages[0]["content"] += (
+            f"\nUser ID: {user_id} "
+            f"- ALWAYS use 'notion_search_with_user' and 'notion_page_content_with_user' tools for this user's Notion data. "
+            f"- The backend API returns user info with lowercase field names: 'access_token', 'refresh_token', etc. "
+            f"- Use 'get_user_info' to get user information if needed. "
+            f"- Use 'save_notion_data_to_backend' to save processed Notion data to backend. "
+            f"- When calling user-specific tools, include these auth parameters:{auth_info} "
+            f"- If you get an access_token from the backend, that means the user HAS authorized Notion access."
+        )
 
     # Tool-call 루프
     max_iterations = 10  # 무한 루프 방지
@@ -226,21 +236,8 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None) -> s
                     }
                 )
 
-            # 노션 페이지 컨텐츠를 가져온 경우 백엔드에 저장
-            if user_id and tname == "notion_page_content" and result:
-                try:
-                    result_dict = _to_dict(result)
-                    if isinstance(result_dict, dict):
-                        page_id = result_dict.get("page_id")
-                        content = result_dict.get("content", "")
-                        if page_id and content:
-                            notion_data = NotionPageData(
-                                notionPageId=page_id,
-                                notionPageText=content
-                            )
-                            await save_notion_page_to_backend(user_id, notion_data)
-                except Exception as e:
-                    print(f"Warning: Could not save to backend: {e}")
+            # 노션 페이지 컨텐츠를 가져온 경우 - MCP 도구에서 자동으로 백엔드 저장 처리
+            # (save_notion_data_to_backend MCP 도구가 이를 처리함)
 
             # 툴 출력까지 대화에 반영했으니, 한 번 더 요청해 최종 답변 받기
             continue
@@ -295,10 +292,26 @@ async def root():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, req: Request):
     """프론트엔드에서 채팅 요청을 받는 엔드포인트"""
     try:
-        response = await process_chat_with_ai(request.message, request.user_id)
+        # HTTP 헤더에서 쿠키 추출 (우선순위: 헤더 > 요청 본문)
+        cookies_from_header = req.headers.get("cookie", "")
+        final_cookies = cookies_from_header or request.cookies or ""
+        
+        # Authorization 헤더 추출
+        auth_from_header = req.headers.get("authorization", "")
+        final_auth_token = auth_from_header or request.auth_token or ""
+        
+        print(f"🍪 Cookies from header: {cookies_from_header}")
+        print(f"🔑 Auth from header: {auth_from_header}")
+        
+        response = await process_chat_with_ai(
+            request.message, 
+            request.user_id, 
+            final_auth_token, 
+            final_cookies
+        )
         return ChatResponse(response=response)
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
