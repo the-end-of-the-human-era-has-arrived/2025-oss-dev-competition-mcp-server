@@ -45,12 +45,6 @@ BACKEND_BASE_URL=http://localhost:8080
 
 ### 3. 서버 실행
 
-#### 방법 1: 시작 스크립트 사용
-```bash
-python start_server.py
-```
-
-#### 방법 2: 직접 실행
 ```bash
 uvicorn web_server:app --host 0.0.0.0 --port 8081 --reload
 ```
