@@ -33,9 +33,6 @@ pip install -r requirements.txt
 # OpenAI API 키 (필수)
 OPENAI_API_KEY=your_openai_api_key_here
 
-# Notion API 토큰 (필수)
-NOTION_TOKEN=your_notion_token_here
-
 # OpenAI 모델 (선택사항, 기본값: gpt-4o-mini)
 OPENAI_MODEL=gpt-4o-mini
 
