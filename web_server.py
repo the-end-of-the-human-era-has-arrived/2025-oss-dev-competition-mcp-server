@@ -85,6 +85,47 @@ def _sanitize(obj: Any):
     return obj
 
 
+def _find_url_spans(text: str) -> List[tuple]:
+    """텍스트 내 URL 구간(start, end) 범위를 모두 수집."""
+    import re
+    spans: List[tuple] = []
+    for m in re.finditer(r"https?://[^\s)]+", text):
+        spans.append((m.start(), m.end()))
+    return spans
+
+
+def _span_contains(spans: List[tuple], idx: int) -> bool:
+    for s, e in spans:
+        if s <= idx < e:
+            return True
+    return False
+
+
+def _redact_ids_not_in_urls(text: str) -> str:
+    """URL 내부가 아닌 곳에 드러난 Notion UUID/page_id 패턴을 [REDACTED_ID]로 치환.
+    URL 내 ID는 링크 동작을 위해 유지합니다.
+    """
+    import re
+    url_spans = _find_url_spans(text)
+
+    patterns = [
+        re.compile(r"\b[0-9a-fA-F]{32}\b"),
+        re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),
+    ]
+
+    def replacer(match: 're.Match') -> str:
+        start = match.start()
+        # URL 내부는 보존
+        if _span_contains(url_spans, start):
+            return match.group(0)
+        return "[REDACTED_ID]"
+
+    redacted = text
+    for pat in patterns:
+        redacted = pat.sub(replacer, redacted)
+    return redacted
+
+
 def _mcp_schema_to_openai_tool(tool: Any) -> Dict[str, Any]:
     """FastMCP의 Tool(Pydantic) 또는 dict를 OpenAI tools 스키마로 변환."""
     t = _to_dict(tool)  # Pydantic -> dict
@@ -158,6 +199,8 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None, cook
                 "When user asks about their Notion content, use the available tools to search and retrieve information. "
                 "If the user asks to update or save Notion data, you should also call the backend API. "
                 "Always respond in Korean. "
+                "Never expose raw internal identifiers (e.g., Notion page_id, block_id, database_id, UUIDs). "
+                "When referencing a Notion page, present a markdown link using its title and URL only. Do not include raw IDs in the final answer. "
                 f"Current user ID: {user_id if user_id else 'Not provided'}"
             ),
         },
@@ -255,7 +298,9 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None, cook
 
         # 더 이상 툴 호출이 없으면 최종 답변
         final_text = msg.content or ""
-        return _strip_surrogates(final_text)
+        # 최종 응답에서 URL 내부가 아닌 원시 ID를 마스킹
+        safe_text = _redact_ids_not_in_urls(_strip_surrogates(final_text))
+        return safe_text
 
     return "죄송합니다. 처리 중 문제가 발생했습니다."
 
