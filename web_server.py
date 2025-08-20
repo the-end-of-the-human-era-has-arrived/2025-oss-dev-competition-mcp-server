@@ -201,6 +201,9 @@ async def process_chat_with_ai(message: str, user_id: Optional[str] = None, cook
                 "Always respond in Korean. "
                 "Never expose raw internal identifiers (e.g., Notion page_id, block_id, database_id, UUIDs). "
                 "When referencing a Notion page, present a markdown link using its title and URL only. Do not include raw IDs in the final answer. "
+                "SOURCE TITLE RULES: Use the exact original Notion page title without any edits. Do NOT paraphrase, summarize, translate, or alter spacing/case/symbols. "
+                "If the exact title is unknown, do not invent one — use the URL itself as the link text (e.g., [https://...](https://...)). "
+                "If necessary, fetch only the minimal metadata (title) to ensure the exact title before rendering sources; avoid fetching full content unnecessarily. "
                 f"Current user ID: {user_id if user_id else 'Not provided'}"
             ),
         },
